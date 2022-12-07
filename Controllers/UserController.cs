@@ -1,75 +1,84 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using JWTCoreDemo.Model;
+using JWTCoreDemo.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.IdentityModel.Tokens;
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Text;
 
 namespace JWTCoreDemo.Controllers
 {
   [Route("api/user")]
-  public class UserController : Controller
+  [Authorize]
+  [ApiController]
+  public class UserController : ControllerBase
   {
-    private IConfiguration configuration;
+    private readonly AppUserService appUserService;
+    private readonly SecurityService securityService;
 
-    public UserController([FromServices] IConfiguration configuration)
+    public UserController(
+      [FromServices] AppUserService appUserService,
+      [FromServices] SecurityService securityService)
     {
-      this.configuration = configuration;
+      this.appUserService = appUserService;
+      this.securityService = securityService;
     }
 
-    public IActionResult Index()
+    [HttpPut]
+    [AllowAnonymous]
+    public IActionResult Create(string email, string password, bool isAdmin)
     {
-      return RedirectToAction("unsecured");
+      try
+      {
+        this.appUserService.Create(email, password, isAdmin);
+      }
+      catch (Exception ex)
+      {
+        return BadRequest(ex.Message);
+      }
+      return Ok();
     }
 
     [HttpGet]
-    [Route("unsecured")]
-    public IActionResult Unsecured()
+    [AllowAnonymous]
+    public IActionResult GetUserNames()
     {
-      return Ok("Unsecured ok");
+      List<string> ret = appUserService.GetUsers()
+        .Select(q => q.Email[..q.Email.IndexOf("@")])
+        .ToList();
+      return Ok(ret);
     }
 
-    [HttpGet]
-    [Route("secured")]
-    [Authorize]
-    public IActionResult Secured()
+    [HttpGet("emails")]
+    public IActionResult GetUserEmails()
     {
-      return Ok("Secured ok");
+      List<string> ret = appUserService.GetUsers()
+        .Select(q => q.Email)
+        .ToList();
+      return Ok(ret);
+    }
+
+    [HttpGet("all")]
+    [Authorize(Roles = AppUser.ADMIN_ROLE_NAME)]
+    public IActionResult GetAll()
+    {
+      List<AppUser> ret = appUserService.GetUsers();
+      return Ok(ret);
     }
 
     [HttpPost]
     [AllowAnonymous]
-    [Route("login")]
     public IActionResult Login(string email, string password)
     {
-      IActionResult ret;
-
-      if (password != "a")
-        ret = BadRequest("Invalid email or password");
-      else
+      AppUser appUser;
+      try
       {
-        var key = Encoding.ASCII.GetBytes(configuration["Jwt:Key"]);
-        var tokenDescriptor = new SecurityTokenDescriptor
-        {
-          Subject = new ClaimsIdentity(new[]
-            {
-                new Claim("Id", Guid.NewGuid().ToString()),
-                new Claim(JwtRegisteredClaimNames.Sub, email),
-                new Claim(JwtRegisteredClaimNames.Email, email),
-                new Claim(JwtRegisteredClaimNames.Aud, "any"),
-                new Claim(JwtRegisteredClaimNames.Iss, "Marek Vajgl test server"),
-                new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())            }),
-          Expires = DateTime.UtcNow.AddSeconds(10),
-          SigningCredentials = new SigningCredentials
-            (new SymmetricSecurityKey(key),
-            SecurityAlgorithms.HmacSha512Signature)
-        };
-        var tokenHandler = new JwtSecurityTokenHandler();
-        var token = tokenHandler.CreateToken(tokenDescriptor);
-        var stringToken = tokenHandler.WriteToken(token);
-        ret = Ok(stringToken);
+        appUser = this.appUserService.GetUserByCredentials(email, password);
       }
-      return ret;
+      catch (Exception ex)
+      {
+        return BadRequest(ex.Message);
+      }
+
+      string token = securityService.BuildJwtToken(appUser);
+      return Ok(token);
     }
   }
 }
